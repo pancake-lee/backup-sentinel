@@ -1,10 +1,6 @@
 package app
 
 import (
-	"os"
-	"path/filepath"
-	"strings"
-
 	"github.com/pancake-lee/pgo/pkg/plogger"
 )
 
@@ -33,20 +29,9 @@ type Options struct {
 	Mode Mode
 	// Check when running as consumer: if true, only print pending events instead of processing.
 	Check bool
-}
-
-// defaultDBPath returns a path for the sqlite DB derived from the executable name
-// (same name as the executable, with .db suffix, placed next to the executable).
-func defaultDBPath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		// fallback to ./backupsentinel.db
-		return "./backupsentinel.db"
-	}
-	dir := filepath.Dir(exe)
-	base := filepath.Base(exe)
-	name := strings.TrimSuffix(base, filepath.Ext(base))
-	return filepath.Join(dir, name+".db")
+	// DBPath specifies the path to the sqlite database file. If empty, caller should
+	// provide a default (e.g. ./backupSentinel.db).
+	DBPath string
 }
 
 // App coordinates the executable lifecycle.

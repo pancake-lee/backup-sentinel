@@ -8,7 +8,10 @@ import (
 )
 
 func (a *App) runConsumer() error {
-	dbPath := defaultDBPath()
+	dbPath := a.options.DBPath
+	if dbPath == "" {
+		dbPath = "./backupSentinel.db"
+	}
 	st, err := OpenAndInit(dbPath)
 	if err != nil {
 		plogger.Errorf("open sqlite db %s: %v", dbPath, err)

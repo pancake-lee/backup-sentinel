@@ -12,10 +12,9 @@ import (
 func TestAppProducerConsumerCheck(t *testing.T) {
 	plogger.InitLogger(false, zapcore.DebugLevel, "./logs/")
 
-	// compute default DB path and use testdata dir to ensure isolation
-	dbPath := defaultDBPath()
-	// ensure testdata dir exists near current working dir so defaultDBPath() points into it
+	// use test DB path in testdata to ensure isolation
 	_ = os.MkdirAll("./testdata", 0o755)
+	dbPath := "./testdata/backupsentinel.db"
 	// if defaultDBPath points inside testdata, remove it; otherwise ignore
 	_ = os.Remove(dbPath)
 	defer func() {
@@ -29,7 +28,7 @@ func TestAppProducerConsumerCheck(t *testing.T) {
 
 	// --------------------------------------------------
 	// run producer to insert
-	prod := New(Options{Mode: ModeProducer})
+	prod := New(Options{Mode: ModeProducer, DBPath: dbPath})
 	if err := prod.Run([]string{payload}); err != nil {
 		t.Fatalf("producer Run: %v", err)
 	}
@@ -55,7 +54,7 @@ func TestAppProducerConsumerCheck(t *testing.T) {
 
 	// --------------------------------------------------
 	// run consumer in check mode (should not fail)
-	cons := New(Options{Mode: ModeConsumer, Check: true})
+	cons := New(Options{Mode: ModeConsumer, Check: true, DBPath: dbPath})
 	if err := cons.Run(nil); err != nil {
 		t.Fatalf("consumer Run: %v", err)
 	}

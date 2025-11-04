@@ -44,7 +44,10 @@ func (a *App) runProducer(args []string) error {
 
 	// --------------------------------------------------
 	// persist event into SQLite
-	dbPath := defaultDBPath()
+	dbPath := a.options.DBPath
+	if dbPath == "" {
+		dbPath = "./backupSentinel.db"
+	}
 	st, err := OpenAndInit(dbPath)
 	if err != nil {
 		plogger.Errorf("open sqlite db %s: %v", dbPath, err)
