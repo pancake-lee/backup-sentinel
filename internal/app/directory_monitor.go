@@ -27,7 +27,6 @@ const (
 
 // Event holds the structured data emitted by Directory Monitor.
 type Event struct {
-	RawPayload   string
 	EventTime    time.Time
 	RawEventType string
 	EventType    string
@@ -46,7 +45,7 @@ type jsonPayload struct {
 }
 
 var eventTypeMap = map[string]string{
-	"创建":  "CREATE",
+	"新增":  "CREATE",
 	"修改":  "MODIFY",
 	"重命名": "RENAME",
 	"删除":  "DELETE",
@@ -78,7 +77,6 @@ func ParseDirectoryMonitorPayload(raw string) (Event, error) {
 	}
 
 	event := Event{
-		RawPayload:   raw,
 		EventTime:    occurredAt,
 		RawEventType: payload.EventType,
 		EventType:    normalizedType,

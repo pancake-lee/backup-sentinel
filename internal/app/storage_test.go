@@ -18,7 +18,6 @@ func TestStorageInsertEvent(t *testing.T) {
 		t.Fatalf("OpenAndInit (1): %v", err)
 	}
 	ev1 := Event{
-		RawPayload:   `{"t":"2025/11/3 16:43:40","e":"删除","d":"\\\\host\\dir","f":"\\\\host\\dir\\1.jpg"}`,
 		EventTime:    time.Now(),
 		RawEventType: "删除",
 		EventType:    "DELETE",
@@ -52,7 +51,6 @@ func TestStorageInsertEvent(t *testing.T) {
 	}()
 
 	ev2 := Event{
-		RawPayload:   `{"t":"2025/11/3 16:44:40","e":"新增","d":"\\\\host\\dir","f":"\\\\host\\dir\\2.jpg"}`,
 		EventTime:    time.Now().Add(time.Second),
 		RawEventType: "新增",
 		EventType:    "CREATE",

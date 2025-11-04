@@ -64,7 +64,6 @@ func (s *Storage) InitSchema() error {
 		dir_path TEXT NOT NULL,
 		file_path TEXT NOT NULL,
 		old_file_path TEXT,
-		raw_payload TEXT,
 		processed INTEGER DEFAULT 0
 	);`
 
@@ -77,10 +76,10 @@ func (s *Storage) InitSchema() error {
 
 // InsertEvent inserts the Event and returns the inserted row id.
 func (s *Storage) InsertEvent(e Event) (int64, error) {
-	const query = `INSERT INTO file_events (event_time, event_type, raw_event_type, dir_path, file_path, old_file_path, raw_payload) VALUES (?, ?, ?, ?, ?, ?, ?)`
+	const query = `INSERT INTO file_events (event_time, event_type, raw_event_type, dir_path, file_path, old_file_path) VALUES (?, ?, ?, ?, ?, ?)`
 
 	// Use time in UTC for storage
-	res, err := s.db.Exec(query, e.EventTime.UTC().Format(time.RFC3339), e.EventType, e.RawEventType, e.DirPath, e.FilePath, e.OldFilePath, e.RawPayload)
+	res, err := s.db.Exec(query, e.EventTime.UTC().Format(time.RFC3339), e.EventType, e.RawEventType, e.DirPath, e.FilePath, e.OldFilePath)
 	if err != nil {
 		return 0, fmt.Errorf("insert event: %w", err)
 	}
@@ -93,7 +92,7 @@ func (s *Storage) InsertEvent(e Event) (int64, error) {
 
 // GetEventByID returns the Event stored with the given id.
 func (s *Storage) GetEventByID(id int64) (Event, error) {
-	const query = `SELECT event_time, event_type, raw_event_type, dir_path, file_path, old_file_path, raw_payload FROM file_events WHERE id = ?`
+	const query = `SELECT event_time, event_type, raw_event_type, dir_path, file_path, old_file_path FROM file_events WHERE id = ?`
 
 	var (
 		eventTimeStr string
@@ -102,11 +101,10 @@ func (s *Storage) GetEventByID(id int64) (Event, error) {
 		dirPath      string
 		filePath     string
 		oldFilePath  sql.NullString
-		rawPayload   sql.NullString
 	)
 
 	row := s.db.QueryRow(query, id)
-	if err := row.Scan(&eventTimeStr, &eventType, &rawEventType, &dirPath, &filePath, &oldFilePath, &rawPayload); err != nil {
+	if err := row.Scan(&eventTimeStr, &eventType, &rawEventType, &dirPath, &filePath, &oldFilePath); err != nil {
 		return Event{}, fmt.Errorf("scan event: %w", err)
 	}
 
@@ -116,7 +114,6 @@ func (s *Storage) GetEventByID(id int64) (Event, error) {
 	}
 
 	ev := Event{
-		RawPayload:   "",
 		EventTime:    t,
 		RawEventType: "",
 		EventType:    eventType,
@@ -129,9 +126,6 @@ func (s *Storage) GetEventByID(id int64) (Event, error) {
 	}
 	if oldFilePath.Valid {
 		ev.OldFilePath = oldFilePath.String
-	}
-	if rawPayload.Valid {
-		ev.RawPayload = rawPayload.String
 	}
 
 	return ev, nil
@@ -146,7 +140,7 @@ type PendingEvent struct {
 // GetPendingEvents returns up to `limit` events that are not yet processed,
 // ordered by event_time ascending.
 func (s *Storage) GetPendingEvents(limit int) ([]PendingEvent, error) {
-	const query = `SELECT id, event_time, event_type, raw_event_type, dir_path, file_path, old_file_path, raw_payload FROM file_events WHERE processed = 0 ORDER BY event_time ASC LIMIT ?`
+	const query = `SELECT id, event_time, event_type, raw_event_type, dir_path, file_path, old_file_path FROM file_events WHERE processed = 0 ORDER BY event_time ASC LIMIT ?`
 
 	rows, err := s.db.Query(query, limit)
 	if err != nil {
@@ -164,9 +158,8 @@ func (s *Storage) GetPendingEvents(limit int) ([]PendingEvent, error) {
 			dirPath      string
 			filePath     string
 			oldFilePath  sql.NullString
-			rawPayload   sql.NullString
 		)
-		if err := rows.Scan(&id, &eventTimeStr, &eventType, &rawEventType, &dirPath, &filePath, &oldFilePath, &rawPayload); err != nil {
+		if err := rows.Scan(&id, &eventTimeStr, &eventType, &rawEventType, &dirPath, &filePath, &oldFilePath); err != nil {
 			return nil, fmt.Errorf("scan pending row: %w", err)
 		}
 		t, err := time.Parse(time.RFC3339, eventTimeStr)
@@ -174,7 +167,6 @@ func (s *Storage) GetPendingEvents(limit int) ([]PendingEvent, error) {
 			return nil, fmt.Errorf("parse time: %w", err)
 		}
 		ev := Event{
-			RawPayload:   "",
 			EventTime:    t,
 			RawEventType: "",
 			EventType:    eventType,
@@ -188,9 +180,6 @@ func (s *Storage) GetPendingEvents(limit int) ([]PendingEvent, error) {
 		if oldFilePath.Valid {
 			ev.OldFilePath = oldFilePath.String
 		}
-		if rawPayload.Valid {
-			ev.RawPayload = rawPayload.String
-		}
 
 		res = append(res, PendingEvent{ID: id, Event: ev})
 	}
@@ -198,4 +187,19 @@ func (s *Storage) GetPendingEvents(limit int) ([]PendingEvent, error) {
 		return nil, fmt.Errorf("rows err: %w", err)
 	}
 	return res, nil
+}
+
+// MarkProcessed marks the event with given id as processed (1).
+func (s *Storage) MarkProcessed(id int64) error {
+	const query = `UPDATE file_events SET processed = 1 WHERE id = ?`
+	res, err := s.db.Exec(query, id)
+	if err != nil {
+		return fmt.Errorf("mark processed exec: %w", err)
+	}
+	if ra, err := res.RowsAffected(); err == nil {
+		if ra == 0 {
+			return fmt.Errorf("mark processed: no rows affected for id %d", id)
+		}
+	}
+	return nil
 }
