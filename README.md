@@ -1,1 +1,39 @@
 # BackupSentinel
+
+- 系统架构
+  - 使用Directory Monitor监控文件系统变化
+  - 程序A作为事件记录器，快速记录事件到持久化存储
+  - 程序B作为事件处理器，异步处理文件上传和删除通知
+  - SQLite数据库作为事件存储和状态管理中心
+- 数据库设计
+  - file_events表包含字段：id、event_time、event_type、file_path、dir_path、file_size、file_hash、last_modified、status、version、retry_count、created_at、processed_at
+  - 关键索引：状态索引、创建时间索引、文件路径和状态联合索引、版本控制索引
+- 程序A设计
+  - 程序A/B同一个可执行文件，不输入-consumer则运行生产者，把文件事件写入db
+  - 输入参数格式："(%%date%% %%time%%) %%event%% %%dirpath%% %%fullfile%%"
+  - 解析参数为结构化数据：事件时间、事件类型、目录路径、完整文件路径
+  - 标准化事件类型：FileCreated→CREATE，FileModified→MODIFY，FileDeleted→DELETE
+  - 使用SQLite连接池和WAL模式优化性能
+  - 快速插入事件记录后立即返回，不阻塞Directory Monitor
+- 程序B设计
+  - 程序A/B同一个可执行文件，-consumer则运行为消费者，负责上传文件，发出消息
+  - 采用智能事件选择策略，只处理每个文件的最新待处理事件
+  - 状态预处理机制检查文件状态：FILE_NOT_EXIST、HAS_NEWER_VERSION、READY_FOR_UPLOAD
+  - 事件处理决策矩阵根据事件类型和文件状态决定处理动作
+  - 竞态条件处理：文件状态一致性保证、版本控制策略、文件锁机制
+  - 错误处理和重试：最大重试次数3次，指数退避策略，失败事件标记供人工干预
+  - 文件上传模块
+    - 定义统一接口：UploadFile、NotifyDelete、VerifyUpload
+    - 传输保障：断点续传支持、传输完整性校验、网络异常恢复
+- 系统部署和运维
+  - 程序A由Directory Monitor触发执行
+  - 程序B作为Windows服务常驻运行
+  - 监控指标：事件处理吞吐量、上传成功率、事件积压数量、处理延迟
+  - 数据维护：自动清理已完成事件、数据库备份、日志轮转
+- 容错和可靠性
+  - 数据一致性：事务性事件状态更新、处理中断后的状态恢复、最终一致性保证
+  - 系统健壮性：进程异常重启恢复、数据库连接异常处理、磁盘空间监控
+- 扩展性考虑
+  - 水平扩展：多实例程序B负载均衡、基于文件路径的分片策略、分布式锁机制
+  - 性能优化：批量事件处理、并行文件上传、内存缓存优化
+  
