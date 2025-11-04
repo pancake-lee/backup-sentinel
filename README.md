@@ -1,5 +1,7 @@
 # BackupSentinel
 
+BackupSentinel 是一个用于备份与变更同步的轻量级工具。它通过监控文件系统事件将变更快速记录到本地 SQLite 数据库（生产者模式），并由常驻的消费者进程异步处理上传与删除通知（消费者模式）。
+
 - 系统架构
   - 使用Directory Monitor监控文件系统变化
   - 程序A作为事件记录器，快速记录事件到持久化存储
@@ -10,9 +12,9 @@
   - 关键索引：状态索引、创建时间索引、文件路径和状态联合索引、版本控制索引
 - 程序A设计
   - 程序A/B同一个可执行文件，不输入-consumer则运行生产者，把文件事件写入db
-  - 输入参数格式："(%%date%% %%time%%) %%event%% %%dirpath%% %%fullfile%%"
+  - 输入参数格式：`"{\"t\":\"%date% %time%\", \"e\":\"%event%\", \"d\":\"%dirpath%\", \"f\":\"%fullfile%\", \"of\":\"%oldfullfile%\"}"`
   - 解析参数为结构化数据：事件时间、事件类型、目录路径、完整文件路径
-  - 标准化事件类型：FileCreated→CREATE，FileModified→MODIFY，FileDeleted→DELETE
+  - 标准化事件类型：Directory Monitor 提供的event随语言设置而改变，需要转换为统一枚举值
   - 使用SQLite连接池和WAL模式优化性能
   - 快速插入事件记录后立即返回，不阻塞Directory Monitor
 - 程序B设计
@@ -36,4 +38,3 @@
 - 扩展性考虑
   - 水平扩展：多实例程序B负载均衡、基于文件路径的分片策略、分布式锁机制
   - 性能优化：批量事件处理、并行文件上传、内存缓存优化
-  
