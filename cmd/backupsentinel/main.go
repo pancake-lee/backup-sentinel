@@ -12,16 +12,21 @@ import (
 
 func main() {
 	consumerMode := flag.Bool("consumer", false, "run in consumer mode to process pending file events")
+	checkMode := flag.Bool("check", false, "when in consumer mode, only print pending events instead of processing them")
 	flag.Parse()
 
-	plogger.InitLogger(false, zapcore.DebugLevel, "./logs/")
+	var isLogConsole bool = false
+	if *checkMode {
+		isLogConsole = true
+	}
+	plogger.InitLogger(isLogConsole, zapcore.DebugLevel, "./logs/")
 
 	mode := app.ModeProducer
 	if *consumerMode {
 		mode = app.ModeConsumer
 	}
 
-	application := app.New(app.Options{Mode: mode})
+	application := app.New(app.Options{Mode: mode, Check: *checkMode})
 	if err := application.Run(flag.Args()); err != nil {
 		plogger.Errorf("backup sentinel stopped: %v", err)
 		os.Exit(1)
