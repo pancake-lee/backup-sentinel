@@ -2,9 +2,11 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pancake-lee/pgo/pkg/plogger"
+	"github.com/pancake-lee/pgo/pkg/putil"
 )
 
 func (a *App) runConsumer() error {
@@ -71,7 +73,15 @@ func (a *App) runConsumer() error {
 func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
 	plogger.Infof("process id=%d type=%s file=%s at=%s", pe.ID, pe.EventType, pe.FilePath, pe.EventTime.Format(time.RFC3339))
 
-	// TODO: replace with real processing (upload/delete) logic which may take longer
+	// replace %fullfile% and execute it.
+	cmdStr := a.options.Cmd
+	cmdStr = strings.ReplaceAll(cmdStr, `%fullfile%`, pe.FilePath)
+	out, err := putil.ExecSplit(cmdStr)
+	plogger.Debugf("exec cmd[%s]\nerr[%v]\nout[%v]", cmdStr, err, out)
+	if err != nil {
+		return plogger.LogErr(err)
+	}
+
 	if err := st.MarkProcessed(pe.ID); err != nil {
 		plogger.Errorf("mark processed id=%d: %v", pe.ID, err)
 		return fmt.Errorf("mark processed: %w", err)

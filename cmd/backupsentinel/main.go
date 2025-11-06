@@ -15,6 +15,7 @@ func main() {
 	logLevel := flag.String("log-level", "debug", "set the logging level (debug|info|warn|error)")
 	isLogConsole := flag.Bool("l", false, "log to console instead of file")
 	dbPath := flag.String("db", "./backupSentinel.db", "path to sqlite database file")
+	cmdTemplate := flag.String("cmd", "", "command template to execute for each event; use %fullfile% placeholder")
 	flag.Parse()
 
 	if *checkMode {
@@ -25,13 +26,19 @@ func main() {
 
 	mode := app.ModeProducer
 	if *consumerMode {
-		plogger.InitLogger(*isLogConsole, lv, "./logs/consumer/")
+		if *cmdTemplate == "" {
+			plogger.Errorf("consumer must set cmd to handle a event")
+			os.Exit(1)
+		}
+
 		mode = app.ModeConsumer
+		plogger.InitLogger(*isLogConsole, lv, "./logs/consumer/")
+		plogger.Debugf("cmd[%v]", *cmdTemplate)
 	} else {
 		plogger.InitLogger(*isLogConsole, lv, "./logs/producer/")
 	}
 
-	application := app.New(app.Options{Mode: mode, Check: *checkMode, DBPath: *dbPath})
+	application := app.New(app.Options{Mode: mode, Check: *checkMode, DBPath: *dbPath, Cmd: *cmdTemplate})
 	if err := application.Run(flag.Args()); err != nil {
 		plogger.Errorf("backup sentinel stopped: %v", err)
 		os.Exit(1)

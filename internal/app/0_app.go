@@ -32,6 +32,9 @@ type Options struct {
 	// DBPath specifies the path to the sqlite database file. If empty, caller should
 	// provide a default (e.g. ./backupSentinel.db).
 	DBPath string
+	// Cmd is an optional command template executed to process an event. It may
+	// contain %fullfile% which will be replaced with the event's FilePath.
+	Cmd string
 }
 
 // App coordinates the executable lifecycle.
