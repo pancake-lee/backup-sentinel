@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/pancake-lee/pgo/pkg/plogger"
@@ -74,8 +74,8 @@ func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
 	plogger.Infof("process id=%d type=%s file=%s at=%s", pe.ID, pe.EventType, pe.FilePath, pe.EventTime.Format(time.RFC3339))
 
 	// replace %fullfile% and execute it.
-	cmdStr := a.options.Cmd
-	cmdStr = strings.ReplaceAll(cmdStr, `%fullfile%`, pe.FilePath)
+	cmdStr := a.options.Cmd + " fullfile " + strconv.Quote(pe.FilePath)
+	// cmdStr = strings.ReplaceAll(cmdStr, `%fullfile%`, pe.FilePath)
 	out, err := putil.ExecSplit(cmdStr)
 	plogger.Debugf("exec cmd[%s]\nerr[%v]\nout[%v]", cmdStr, err, out)
 	if err != nil {
