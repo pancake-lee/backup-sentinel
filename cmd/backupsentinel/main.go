@@ -16,6 +16,7 @@ func main() {
 	isLogConsole := flag.Bool("l", false, "log to console instead of file")
 	dbPath := flag.String("db", "./backupSentinel.db", "path to sqlite database file")
 	cmdTemplate := flag.String("cmd", "", "command template to execute for each event; use %fullfile% placeholder")
+	cmdFile := flag.String("f", "", "path to JSON file containing per-event commands")
 	flag.Parse()
 
 	if *checkMode {
@@ -26,8 +27,8 @@ func main() {
 
 	mode := app.ModeProducer
 	if *consumerMode {
-		if *cmdTemplate == "" {
-			plogger.Errorf("consumer must set cmd to handle a event")
+		if *cmdTemplate == "" && *cmdFile == "" {
+			plogger.Errorf("consumer must set cmd or cmdFile to handle a event")
 			os.Exit(1)
 		}
 
@@ -38,7 +39,7 @@ func main() {
 		plogger.InitLogger(*isLogConsole, lv, "./logs/producer/")
 	}
 
-	application := app.New(app.Options{Mode: mode, Check: *checkMode, DBPath: *dbPath, Cmd: *cmdTemplate})
+	application := app.New(app.Options{Mode: mode, Check: *checkMode, DBPath: *dbPath, Cmd: *cmdTemplate, CmdFile: *cmdFile})
 	if err := application.Run(flag.Args()); err != nil {
 		plogger.Errorf("backup sentinel stopped: %v", err)
 		os.Exit(1)

@@ -1,8 +1,11 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pancake-lee/pgo/pkg/plogger"
@@ -24,6 +27,14 @@ func (a *App) runConsumer() error {
 	// use named method to process a pending event
 	process := func(pe PendingEvent) error {
 		return a.processPendingEvent(st, pe)
+	}
+
+	// If a command file is provided, try to load per-event commands.
+	if a.options.CmdFile != "" {
+		if err := a.loadCmdFile(a.options.CmdFile); err != nil {
+			plogger.Errorf("failed to load cmd file %s: %v", a.options.CmdFile, err)
+			return fmt.Errorf("load cmd file: %w", err)
+		}
 	}
 
 	// If Check flag is set, just list once and exit.
@@ -72,10 +83,29 @@ func (a *App) runConsumer() error {
 // future extension (actual upload/delete logic).
 func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
 	plogger.Infof("process id=%d type=%s file=%s at=%s", pe.ID, pe.EventType, pe.FilePath, pe.EventTime.Format(time.RFC3339))
+	// choose command: prefer per-event mapping if present
+	cmdTemplate := a.options.Cmd
+	if a.options.Cmds != nil {
+		if evCmd, ok := a.options.Cmds[pe.EventType]; ok && evCmd != "" {
+			cmdTemplate = evCmd
+		}
+	}
 
-	// replace %fullfile% and execute it.
-	cmdStr := a.options.Cmd + " fullfile " + strconv.Quote(pe.FilePath)
-	// cmdStr = strings.ReplaceAll(cmdStr, `%fullfile%`, pe.FilePath)
+	// If no template at all, error
+	if cmdTemplate == "" {
+		plogger.Errorf("no command configured to process events")
+		return fmt.Errorf("no command configured")
+	}
+
+	// replace %fullfile% and execute it. Older behavior expected the word 'fullfile' then quoted path,
+	// maintain compatibility: if template contains %fullfile% replace it, otherwise append ' fullfile <quoted>'
+	var cmdStr string
+	if strings.Contains(cmdTemplate, "%fullfile%") {
+		// replace placeholder with a quoted path to preserve spaces
+		cmdStr = strings.ReplaceAll(cmdTemplate, "%fullfile%", strconv.Quote(pe.FilePath))
+	} else {
+		cmdStr = cmdTemplate + " fullfile " + strconv.Quote(pe.FilePath)
+	}
 	out, err := putil.ExecSplit(cmdStr)
 	plogger.Debugf("exec cmd[%s]\nerr[%v]\nout[%v]", cmdStr, err, out)
 	if err != nil {
@@ -87,5 +117,43 @@ func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
 		return fmt.Errorf("mark processed: %w", err)
 	}
 	plogger.Debugf("marked processed id=%d", pe.ID)
+	return nil
+}
+
+// loadCmdFile reads the provided JSON file and fills a.options.Cmds with
+// normalized event type keys mapping to command templates. Expected JSON keys:
+// add_cmd, modify_cmd, move_cmd, delete_cmd
+func (a *App) loadCmdFile(path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read file: %w", err)
+	}
+
+	var payload struct {
+		AddCmd    string `json:"add_cmd"`
+		ModifyCmd string `json:"modify_cmd"`
+		MoveCmd   string `json:"move_cmd"`
+		DeleteCmd string `json:"delete_cmd"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		return fmt.Errorf("unmarshal cmd file: %w", err)
+	}
+
+	m := make(map[string]string)
+	if payload.AddCmd != "" {
+		m["CREATE"] = payload.AddCmd
+	}
+	if payload.ModifyCmd != "" {
+		m["MODIFY"] = payload.ModifyCmd
+	}
+	if payload.MoveCmd != "" {
+		m["RENAME"] = payload.MoveCmd
+	}
+	if payload.DeleteCmd != "" {
+		m["DELETE"] = payload.DeleteCmd
+	}
+
+	a.options.Cmds = m
+	plogger.Debugf("loaded commands from %s: %+v", path, a.options.Cmds)
 	return nil
 }

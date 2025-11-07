@@ -35,6 +35,11 @@ type Options struct {
 	// Cmd is an optional command template executed to process an event. It may
 	// contain %fullfile% which will be replaced with the event's FilePath.
 	Cmd string
+	// CmdFile optionally points to a JSON file containing per-event commands.
+	// When set, the file is parsed and commands loaded into Cmds.
+	CmdFile string
+	// Cmds stores commands keyed by normalized event type (e.g. CREATE, MODIFY, RENAME, DELETE).
+	Cmds map[string]string
 }
 
 // App coordinates the executable lifecycle.
