@@ -206,14 +206,9 @@ func GetAndFixedPendingEvents(st *Storage) ([]PendingEvent, error) {
 		if cur.EventType == EventType_DELETE {
 			// find a CREATE event within 1s matching the path semantics
 			match := func(a, b PendingEvent) bool {
-				if b.EventType == EventType_CREATE {
-					return false
-				}
-				// quick path: same basename
-				baseA := filepath.Base(a.FilePath)
-				baseB := filepath.Base(b.FilePath)
-				// TODO 只有文件名校验有点危险，加个size，DM支持的
-				return baseA == baseB
+				return b.EventType == EventType_CREATE &&
+					a.Size == b.Size &&
+					filepath.Base(a.FilePath) == filepath.Base(b.FilePath)
 			}
 			idx := findNextMatchingIndex(all, i, match, time.Second)
 			if idx != -1 {
@@ -264,10 +259,7 @@ func GetAndFixedPendingEvents(st *Storage) ([]PendingEvent, error) {
 func findNextMatchingIndex(all []PendingEvent, start int, match func(a, b PendingEvent) bool, maxDelta time.Duration) int {
 	base := all[start]
 	for j := start + 1; j < len(all); j++ {
-		dt := all[j].EventTime.Sub(base.EventTime)
-		if dt < 0 {
-			dt = -dt
-		}
+		dt := all[j].EventTime.Sub(base.EventTime).Abs()
 		if dt > maxDelta {
 			// beyond search window
 			break

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pancake-lee/pgo/pkg/plogger"
+	"github.com/pancake-lee/pgo/pkg/putil"
 )
 
 // 配置: {"t":"%date% %time%", "e":"%event%", "d":"%dirpath%", "f":"%fullfile%"}
@@ -32,6 +33,7 @@ type jsonPayload struct {
 	Directory string `json:"d"`
 	File      string `json:"f"`
 	OldFile   string `json:"of"`
+	Size      string `json:"s"`
 }
 
 var eventTypeMap = map[string]EventType{
@@ -63,6 +65,7 @@ type Event struct {
 	DirPath      string
 	FilePath     string
 	OldFilePath  string
+	Size         int64
 }
 
 // --------------------------------------------------
@@ -98,6 +101,7 @@ func ParseDirectoryMonitorPayload(raw string) (*Event, error) {
 		DirPath:      payload.Directory,
 		FilePath:     payload.File,
 		OldFilePath:  payload.OldFile,
+		Size:         putil.StrToInt64WithDefault(payload.Size, 0),
 	}
 
 	return &event, nil
