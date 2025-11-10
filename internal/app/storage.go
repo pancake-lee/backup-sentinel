@@ -75,7 +75,7 @@ func (s *Storage) InitSchema() error {
 }
 
 // InsertEvent inserts the Event and returns the inserted row id.
-func (s *Storage) InsertEvent(e Event) (int64, error) {
+func (s *Storage) InsertEvent(e *Event) (int64, error) {
 	const query = `INSERT INTO file_events (event_time, event_type, raw_event_type, dir_path, file_path, old_file_path) VALUES (?, ?, ?, ?, ?, ?)`
 
 	// Use time in UTC for storage
@@ -116,7 +116,7 @@ func (s *Storage) GetEventByID(id int64) (Event, error) {
 	ev := Event{
 		EventTime:    t,
 		RawEventType: "",
-		EventType:    eventType,
+		EventType:    EventType(eventType),
 		DirPath:      dirPath,
 		FilePath:     filePath,
 		OldFilePath:  "",
@@ -137,14 +137,38 @@ type PendingEvent struct {
 	Event
 }
 
-// GetPendingEvents returns up to `limit` events that are not yet processed,
-// ordered by event_time ascending.
-func (s *Storage) GetPendingEvents(limit int) ([]PendingEvent, error) {
-	const query = `SELECT id, event_time, event_type, raw_event_type, dir_path, file_path, old_file_path FROM file_events WHERE processed = 0 ORDER BY event_time ASC LIMIT ?`
+// GetPendingEvents returns the earliest unprocessed event (older than 2s)
+// and any subsequent unprocessed events whose event_time is within 2 second
+// after that earliest event. Results are ordered by event_time ascending.
+func (s *Storage) GetPendingEvents() ([]PendingEvent, error) {
+	// only consider events older than 2 second to avoid racing with writer
+	cutoff := time.Now().Add(-2 * time.Second).UTC().Format(time.RFC3339)
 
-	rows, err := s.db.Query(query, limit)
+	// 1) find the earliest event_time among unprocessed events older than cutoff
+	const minQuery = `SELECT MIN(event_time) FROM file_events WHERE processed = 0 AND event_time <= ?`
+	var minEventTime sql.NullString
+	if err := s.db.QueryRow(minQuery, cutoff).Scan(&minEventTime); err != nil {
+		return nil, fmt.Errorf("query min event_time: %w", err)
+	}
+	if !minEventTime.Valid || minEventTime.String == "" {
+		// no eligible events
+		return nil, nil
+	}
+
+	tmin, err := time.Parse(time.RFC3339, minEventTime.String)
 	if err != nil {
-		return nil, fmt.Errorf("query pending: %w", err)
+		return nil, fmt.Errorf("parse min event_time: %w", err)
+	}
+
+	// upper bound = minEventTime + 2s (storage returns a slightly larger window;
+	// GetAndFixedPendingEvents will only act on matches within 1s)
+	upper := tmin.Add(2 * time.Second).UTC().Format(time.RFC3339)
+	lower := tmin.UTC().Format(time.RFC3339)
+
+	const query = `SELECT id, event_time, event_type, raw_event_type, dir_path, file_path, old_file_path FROM file_events WHERE processed = 0 AND event_time >= ? AND event_time <= ? ORDER BY event_time ASC`
+	rows, err := s.db.Query(query, lower, upper)
+	if err != nil {
+		return nil, fmt.Errorf("query pending window: %w", err)
 	}
 	defer rows.Close()
 
@@ -169,7 +193,7 @@ func (s *Storage) GetPendingEvents(limit int) ([]PendingEvent, error) {
 		ev := Event{
 			EventTime:    t,
 			RawEventType: "",
-			EventType:    eventType,
+			EventType:    EventType(eventType),
 			DirPath:      dirPath,
 			FilePath:     filePath,
 			OldFilePath:  "",
@@ -200,6 +224,68 @@ func (s *Storage) MarkProcessed(id int64) error {
 		if ra == 0 {
 			return fmt.Errorf("mark processed: no rows affected for id %d", id)
 		}
+	}
+	return nil
+}
+
+// MarkSkipped marks the event with given id as skipped (processed = 2).
+func (s *Storage) MarkSkipped(id int64) error {
+	const query = `UPDATE file_events SET processed = 2 WHERE id = ?`
+	res, err := s.db.Exec(query, id)
+	if err != nil {
+		return fmt.Errorf("mark skipped exec: %w", err)
+	}
+	if ra, err := res.RowsAffected(); err == nil {
+		if ra == 0 {
+			return fmt.Errorf("mark skipped: no rows affected for id %d", id)
+		}
+	}
+	return nil
+}
+
+// ConvertDeleteToMoveAndSkipCreate performs the conversion of a DELETE row to
+// a MOVE and marks the create row as skipped (processed = 2) in a single
+// transaction to ensure atomicity.
+func (s *Storage) ConvertDeleteToMoveAndSkipCreate(deleteID int64, createID int64, oldFilePath, newFilePath string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+
+	const updDelete = `UPDATE file_events SET event_type = ?, old_file_path = ?, file_path = ? WHERE id = ?`
+	if res, err := tx.Exec(updDelete, string(EventType_MOVE), oldFilePath, newFilePath, deleteID); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("convert delete->move exec: %w", err)
+	} else {
+		if ra, err := res.RowsAffected(); err == nil {
+			if ra == 0 {
+				tx.Rollback()
+				return fmt.Errorf("convert delete->move: no rows affected for id %d", deleteID)
+			}
+		}
+	}
+
+	const skipCreate = `UPDATE file_events SET processed = 2 WHERE id = ?`
+	if res, err := tx.Exec(skipCreate, createID); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("mark create skipped exec: %w", err)
+	} else {
+		if ra, err := res.RowsAffected(); err == nil {
+			if ra == 0 {
+				tx.Rollback()
+				return fmt.Errorf("mark create skipped: no rows affected for id %d", createID)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("commit tx: %w", err)
 	}
 	return nil
 }

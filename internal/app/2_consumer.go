@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -24,11 +25,6 @@ func (a *App) runConsumer() error {
 	}
 	defer st.Close()
 
-	// use named method to process a pending event
-	process := func(pe PendingEvent) error {
-		return a.processPendingEvent(st, pe)
-	}
-
 	// If a command file is provided, try to load per-event commands.
 	if a.options.CmdFile != "" {
 		if err := a.loadCmdFile(a.options.CmdFile); err != nil {
@@ -39,7 +35,7 @@ func (a *App) runConsumer() error {
 
 	// If Check flag is set, just list once and exit.
 	if a.options.Check {
-		pending, err := st.GetPendingEvents(10)
+		pending, err := st.GetPendingEvents()
 		if err != nil {
 			plogger.Errorf("get pending: %v", err)
 			return fmt.Errorf("get pending: %w", err)
@@ -57,13 +53,14 @@ func (a *App) runConsumer() error {
 
 	// Run an initial immediate check
 	runOnce := func() {
-		pending, err := st.GetPendingEvents(10)
+		pending, err := GetAndFixedPendingEvents(st)
 		if err != nil {
 			plogger.Errorf("get pending: %v", err)
 			return
 		}
+
 		for _, pe := range pending {
-			if err := process(pe); err != nil {
+			if err := a.processPendingEvent(st, pe); err != nil {
 				// log and continue with next pending event
 				plogger.Errorf("processing id=%d failed: %v", pe.ID, err)
 			}
@@ -78,15 +75,14 @@ func (a *App) runConsumer() error {
 	}
 }
 
-// processPendingEvent handles a single PendingEvent: it logs the action and
-// marks the row as processed on success. Separated for easier testing and
-// future extension (actual upload/delete logic).
+// processPendingEvent handles a single PendingEvent
 func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
 	plogger.Infof("process id=%d type=%s file=%s at=%s", pe.ID, pe.EventType, pe.FilePath, pe.EventTime.Format(time.RFC3339))
 	// choose command: prefer per-event mapping if present
 	cmdTemplate := a.options.Cmd
 	if a.options.Cmds != nil {
-		if evCmd, ok := a.options.Cmds[pe.EventType]; ok && evCmd != "" {
+		evCmd, ok := a.options.Cmds[pe.EventType]
+		if ok && evCmd != "" {
 			cmdTemplate = evCmd
 		}
 	}
@@ -97,8 +93,7 @@ func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
 		return fmt.Errorf("no command configured")
 	}
 
-	// replace %fullfile% and execute it. Older behavior expected the word 'fullfile' then quoted path,
-	// maintain compatibility: if template contains %fullfile% replace it, otherwise append ' fullfile <quoted>'
+	// if template contains %fullfile% replace it, otherwise append ' fullfile <quoted>'
 	var cmdStr string
 	if strings.Contains(cmdTemplate, "%fullfile%") {
 		// replace placeholder with a quoted path to preserve spaces
@@ -107,14 +102,15 @@ func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
 		cmdStr = cmdTemplate + " fullfile " + strconv.Quote(pe.FilePath)
 	}
 	out, err := putil.ExecSplit(cmdStr)
-	plogger.Debugf("exec cmd[%s]\nerr[%v]\nout[%v]", cmdStr, err, out)
+	plogger.Debugf("exec cmd[%s] err[%v] out[\n-----\n%v\n-----]", cmdStr, err, out)
 	if err != nil {
 		return plogger.LogErr(err)
 	}
 
-	if err := st.MarkProcessed(pe.ID); err != nil {
+	err = st.MarkProcessed(pe.ID)
+	if err != nil {
 		plogger.Errorf("mark processed id=%d: %v", pe.ID, err)
-		return fmt.Errorf("mark processed: %w", err)
+		return plogger.LogErr(err)
 	}
 	plogger.Debugf("marked processed id=%d", pe.ID)
 	return nil
@@ -139,21 +135,146 @@ func (a *App) loadCmdFile(path string) error {
 		return fmt.Errorf("unmarshal cmd file: %w", err)
 	}
 
-	m := make(map[string]string)
+	m := make(map[EventType]string)
 	if payload.AddCmd != "" {
-		m["CREATE"] = payload.AddCmd
+		m[EventType_CREATE] = payload.AddCmd
 	}
 	if payload.ModifyCmd != "" {
-		m["MODIFY"] = payload.ModifyCmd
+		m[EventType_MODIFY] = payload.ModifyCmd
 	}
 	if payload.MoveCmd != "" {
-		m["RENAME"] = payload.MoveCmd
+		m[EventType_MOVE] = payload.MoveCmd
 	}
 	if payload.DeleteCmd != "" {
-		m["DELETE"] = payload.DeleteCmd
+		m[EventType_DELETE] = payload.DeleteCmd
 	}
 
 	a.options.Cmds = m
 	plogger.Debugf("loaded commands from %s: %+v", path, a.options.Cmds)
 	return nil
+}
+
+/*
+	1：获取未处理的最早事件及其2s内的事件，但每次只处理1s内的事件
+	2：重命名后面会紧接一个修改事件
+		判定条件是：
+			重命名和修改两个事件间隔1s之内，文件修改时间大于1s。
+		判定重命名成功
+			保留重命名事件，他将正常处理为一个MOVE事件
+			丢弃这个修改事件，标记为跳过（processed = 2）
+		判定失败：
+			正常处理重命名事件，和1s后的修改事件。
+	3：移动文件将产生“删除+新增”两个事件，我们将两个事件合并/修改为一个MOVE事件
+		判定条件是：
+			删除和新增两个事件间隔1s之内，文件修改时间大于1s。
+		判定移动成功：
+			把删除事件修改为MOVE事件，并且回写到数据库
+				原del事件file_path字段是旧路径，
+				新mv事件file_path字段是新路径，old_file_path字段是旧路径
+				数据库有raw_event_type记录原始事件类型，不用担心丢失原始数据
+			丢弃新增事件，标记为跳过（processed = 2）
+		判定失败：
+			正常处理删除事件和1s后的新增事件。
+*/
+
+// 调用st.GetPendingEvents，并且处理一些特殊事件的转换逻辑，再返回给外层处理
+func GetAndFixedPendingEvents(st *Storage) ([]PendingEvent, error) {
+	all, err := st.GetPendingEvents()
+	if err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		return all, nil
+	}
+
+	earliestTime := all[0].EventTime
+
+	var out []PendingEvent
+	skip := make(map[int]bool)
+	for i := 0; i < len(all); i++ {
+		if skip[i] {
+			// this index was consumed/marked skipped by an earlier merge
+			continue
+		}
+		cur := all[i]
+		if cur.EventTime.Sub(earliestTime) > time.Second {
+			// beyond 1s window; stop processing further events
+			break
+		}
+
+		// Attempt to detect DELETE + CREATE -> MOVE
+		if cur.EventType == EventType_DELETE {
+			// find a CREATE event within 1s matching the path semantics
+			match := func(a, b PendingEvent) bool {
+				if b.EventType == EventType_CREATE {
+					return false
+				}
+				// quick path: same basename
+				baseA := filepath.Base(a.FilePath)
+				baseB := filepath.Base(b.FilePath)
+				// TODO 只有文件名校验有点危险，加个size，DM支持的
+				return baseA == baseB
+			}
+			idx := findNextMatchingIndex(all, i, match, time.Second)
+			if idx != -1 {
+				next := all[idx]
+				if err := st.ConvertDeleteToMoveAndSkipCreate(cur.ID, next.ID, cur.FilePath, next.FilePath); err != nil {
+					plogger.Errorf("convert delete->move tx id=%d create=%d: %v", cur.ID, next.ID, err)
+				} else {
+					plogger.Debugf("converted delete id=%d -> MOVE to %s and skipped create id=%d", cur.ID, next.FilePath, next.ID)
+					cur.EventType = EventType_MOVE
+					cur.OldFilePath = cur.FilePath
+					cur.FilePath = next.FilePath
+				}
+				// mark the create index as skipped so it's not processed later in-memory
+				skip[idx] = true
+				out = append(out, cur)
+				continue
+			}
+		}
+
+		// Attempt to detect MOVE followed by MODIFY to skip the MODIFY
+		if cur.EventType == EventType_MOVE {
+			match := func(a, b PendingEvent) bool {
+				return b.EventType == EventType_MODIFY &&
+					b.FilePath == a.FilePath
+			}
+			idx := findNextMatchingIndex(all, i, match, time.Second)
+			if idx != -1 {
+				next := all[idx]
+				// mark DB and mark in-memory to skip when loop reaches it
+				if err := st.MarkSkipped(next.ID); err != nil {
+					plogger.Errorf("mark skipped id=%d: %v", next.ID, err)
+				} else {
+					plogger.Debugf("marked skipped id=%d", next.ID)
+				}
+				skip[idx] = true
+				out = append(out, cur)
+				continue
+			}
+		}
+
+		// otherwise, normal event => process
+		out = append(out, cur)
+	}
+
+	return out, nil
+}
+
+func findNextMatchingIndex(all []PendingEvent, start int, match func(a, b PendingEvent) bool, maxDelta time.Duration) int {
+	base := all[start]
+	for j := start + 1; j < len(all); j++ {
+		dt := all[j].EventTime.Sub(base.EventTime)
+		if dt < 0 {
+			dt = -dt
+		}
+		if dt > maxDelta {
+			// beyond search window
+			break
+		}
+		if match(base, all[j]) {
+			return j
+		}
+	}
+	return -1
 }

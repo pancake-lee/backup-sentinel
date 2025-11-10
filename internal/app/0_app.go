@@ -39,7 +39,7 @@ type Options struct {
 	// When set, the file is parsed and commands loaded into Cmds.
 	CmdFile string
 	// Cmds stores commands keyed by normalized event type (e.g. CREATE, MODIFY, RENAME, DELETE).
-	Cmds map[string]string
+	Cmds map[EventType]string
 }
 
 // App coordinates the executable lifecycle.

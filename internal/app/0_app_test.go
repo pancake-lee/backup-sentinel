@@ -24,7 +24,7 @@ func TestAppProducerConsumerCheck(t *testing.T) {
 
 	// --------------------------------------------------
 	// construct a raw payload similar to Directory Monitor
-	payload := `{"t":"` + time.Now().Format("2006/1/2 15:04:05") + `", "e":"创建", "d":"\\\\host\\dir", "f":"\\\\host\\dir\\1.jpg"}`
+	payload := `{"t":"` + time.Now().Add(-2*time.Second).Format("2006/1/2 15:04:05") + `", "e":"创建", "d":"\\\\host\\dir", "f":"\\\\host\\dir\\1.jpg"}`
 
 	// --------------------------------------------------
 	// run producer to insert
@@ -44,7 +44,7 @@ func TestAppProducerConsumerCheck(t *testing.T) {
 		t.Fatalf("init schema: %v", err)
 	}
 
-	pending, err := st.GetPendingEvents(10)
+	pending, err := st.GetPendingEvents()
 	if err != nil {
 		t.Fatalf("get pending: %v", err)
 	}

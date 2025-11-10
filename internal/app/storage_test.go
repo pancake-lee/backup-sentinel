@@ -25,7 +25,7 @@ func TestStorageInsertEvent(t *testing.T) {
 		FilePath:     `\\host\dir\\1.jpg`,
 		OldFilePath:  "",
 	}
-	id1, err := st1.InsertEvent(ev1)
+	id1, err := st1.InsertEvent(&ev1)
 	if err != nil {
 		st1.Close()
 		t.Fatalf("InsertEvent (1): %v", err)
@@ -58,7 +58,7 @@ func TestStorageInsertEvent(t *testing.T) {
 		FilePath:     `\\host\dir\\2.jpg`,
 		OldFilePath:  "",
 	}
-	id2, err := st2.InsertEvent(ev2)
+	id2, err := st2.InsertEvent(&ev2)
 	if err != nil {
 		t.Fatalf("InsertEvent (2): %v", err)
 	}
