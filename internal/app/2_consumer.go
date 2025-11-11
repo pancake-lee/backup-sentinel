@@ -46,9 +46,9 @@ func (a *App) runConsumer() error {
 		return nil
 	}
 
-	// Continuous processing loop: check DB every 1s, but ensure that if processing
+	// Continuous processing loop: check DB every 1X, but ensure that if processing
 	// of messages takes longer than the interval we don't run overlapping cycles.
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(rangeInterval)
 	defer ticker.Stop()
 
 	// Run an initial immediate check
@@ -80,10 +80,12 @@ func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
 	plogger.Infof("process id=%d type=%s file=%s at=%s", pe.ID, pe.EventType, pe.FilePath, pe.EventTime.Format(time.RFC3339))
 	// choose command: prefer per-event mapping if present
 	cmdTemplate := a.options.Cmd
+	logCmdEventType := "default"
 	if a.options.Cmds != nil {
 		evCmd, ok := a.options.Cmds[pe.EventType]
 		if ok && evCmd != "" {
 			cmdTemplate = evCmd
+			logCmdEventType = string(pe.EventType)
 		}
 	}
 
@@ -102,7 +104,8 @@ func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
 		cmdStr = cmdTemplate + " fullfile " + strconv.Quote(pe.FilePath)
 	}
 	out, err := putil.ExecSplit(cmdStr)
-	plogger.Debugf("exec cmd[%s] err[%v] out[\n-----\n%v\n-----]", cmdStr, err, out)
+	plogger.Debugf("exec cmd[%v][%s] err[%v] out[\n-----\n%v\n-----]",
+		logCmdEventType, cmdStr, err, out)
 	if err != nil {
 		return plogger.LogErr(err)
 	}
@@ -155,27 +158,42 @@ func (a *App) loadCmdFile(path string) error {
 }
 
 /*
-	1：获取未处理的最早事件及其2s内的事件，但每次只处理1s内的事件
-	2：重命名后面会紧接一个修改事件
-		判定条件是：
-			重命名和修改两个事件间隔1s之内，文件修改时间大于1s。
-		判定重命名成功
-			保留重命名事件，他将正常处理为一个MOVE事件
-			丢弃这个修改事件，标记为跳过（processed = 2）
-		判定失败：
-			正常处理重命名事件，和1s后的修改事件。
-	3：移动文件将产生“删除+新增”两个事件，我们将两个事件合并/修改为一个MOVE事件
-		判定条件是：
-			删除和新增两个事件间隔1s之内，文件修改时间大于1s。
-		判定移动成功：
-			把删除事件修改为MOVE事件，并且回写到数据库
-				原del事件file_path字段是旧路径，
-				新mv事件file_path字段是新路径，old_file_path字段是旧路径
-				数据库有raw_event_type记录原始事件类型，不用担心丢失原始数据
-			丢弃新增事件，标记为跳过（processed = 2）
-		判定失败：
-			正常处理删除事件和1s后的新增事件。
+1：获取未处理的最早事件及其2s内的事件，但每次只处理1s内的事件
+
+	其中2s和1s为可配置参数
+
+2：重命名后面会紧接一个修改事件
+
+	判定条件是：
+		重命名和修改两个事件间隔1s之内，文件修改时间大于1s。
+	判定重命名成功
+		保留重命名事件，他将正常处理为一个MOVE事件
+		丢弃这个修改事件，标记为跳过（processed = 2）
+	判定失败：
+		正常处理重命名事件，和1s后的修改事件。
+
+3：移动文件将产生“删除+新增”两个事件，我们将两个事件合并/修改为一个MOVE事件
+
+	判定条件是：
+		删除和新增两个事件间隔1s之内，文件修改时间大于1s。
+	判定移动成功：
+		把删除事件修改为MOVE事件，并且回写到数据库
+			原del事件file_path字段是旧路径，
+			新mv事件file_path字段是新路径，old_file_path字段是旧路径
+			数据库有raw_event_type记录原始事件类型，不用担心丢失原始数据
+		丢弃新增事件，标记为跳过（processed = 2）
+	判定失败：
+		正常处理删除事件和1s后的新增事件。
 */
+
+// 最早未处理|----rangeInterval---|----rangeInterval---|-else-|now
+// |---------------|查询最早未处理必须足够两倍的rangeInterval---|now
+// 最早未处理|查询范围是两倍的rangeInterval--------------|-else-|now
+// 最早未处理|-实际处理一倍的量-----|----rangeInterval---|-else-|now
+// 最早未处理|------------|-组合事件搜索一倍的量-|--------|-else-|now
+// 最早未处理|-处理轮询一倍的时间---|-处理轮询一倍的时间---|-else-|now
+
+const rangeInterval = 2 * time.Second
 
 // 调用st.GetPendingEvents，并且处理一些特殊事件的转换逻辑，再返回给外层处理
 func GetAndFixedPendingEvents(st *Storage) ([]PendingEvent, error) {
@@ -197,10 +215,12 @@ func GetAndFixedPendingEvents(st *Storage) ([]PendingEvent, error) {
 			continue
 		}
 		cur := all[i]
-		if cur.EventTime.Sub(earliestTime) > time.Second {
+		if cur.EventTime.Sub(earliestTime) > rangeInterval {
 			// beyond 1s window; stop processing further events
 			break
 		}
+		plogger.Debugf("handle event[%v] type[%v] file[%v] old[%v]",
+			cur.ID, cur.EventType, cur.FilePath, cur.OldFilePath)
 
 		// Attempt to detect DELETE + CREATE -> MOVE
 		if cur.EventType == EventType_DELETE {
@@ -210,13 +230,17 @@ func GetAndFixedPendingEvents(st *Storage) ([]PendingEvent, error) {
 					a.Size == b.Size &&
 					filepath.Base(a.FilePath) == filepath.Base(b.FilePath)
 			}
-			idx := findNextMatchingIndex(all, i, match, time.Second)
+			idx := findNextMatchingIndex(all, i, match, rangeInterval)
 			if idx != -1 {
 				next := all[idx]
-				if err := st.ConvertDeleteToMoveAndSkipCreate(cur.ID, next.ID, cur.FilePath, next.FilePath); err != nil {
-					plogger.Errorf("convert delete->move tx id=%d create=%d: %v", cur.ID, next.ID, err)
+				err := st.ConvertDeleteToMoveAndSkipCreate(
+					cur.ID, next.ID, cur.FilePath, next.FilePath)
+				if err != nil {
+					plogger.Errorf("fix event DELETE[%v]+CREATE[%v] -> MOVE err[%v]",
+						cur.ID, next.ID, err)
 				} else {
-					plogger.Debugf("converted delete id=%d -> MOVE to %s and skipped create id=%d", cur.ID, next.FilePath, next.ID)
+					plogger.Debugf("fix event DELETE[%v]+CREATE[%v] -> MOVE[%v]+SKIP[%v]",
+						cur.ID, next.ID, cur.ID, next.ID)
 					cur.EventType = EventType_MOVE
 					cur.OldFilePath = cur.FilePath
 					cur.FilePath = next.FilePath
@@ -234,14 +258,39 @@ func GetAndFixedPendingEvents(st *Storage) ([]PendingEvent, error) {
 				return b.EventType == EventType_MODIFY &&
 					b.FilePath == a.FilePath
 			}
-			idx := findNextMatchingIndex(all, i, match, time.Second)
+			idx := findNextMatchingIndex(all, i, match, rangeInterval)
 			if idx != -1 {
 				next := all[idx]
 				// mark DB and mark in-memory to skip when loop reaches it
 				if err := st.MarkSkipped(next.ID); err != nil {
-					plogger.Errorf("mark skipped id=%d: %v", next.ID, err)
+					plogger.Errorf("fix event RENAME[%v]+MODIFY[%v] -> MOVE err[%v]",
+						cur.ID, next.ID, err)
 				} else {
-					plogger.Debugf("marked skipped id=%d", next.ID)
+					plogger.Debugf("fix event RENAME[%v]+MODIFY[%v] -> MOVE[%v]+SKIP[%v]",
+						cur.ID, next.ID, cur.ID, next.ID)
+				}
+				skip[idx] = true
+				out = append(out, cur)
+				continue
+			}
+		}
+
+		// Attempt to detect MOVE followed by MODIFY to skip the MODIFY
+		if cur.EventType == EventType_CREATE {
+			match := func(a, b PendingEvent) bool {
+				return b.EventType == EventType_MODIFY &&
+					b.FilePath == a.FilePath
+			}
+			idx := findNextMatchingIndex(all, i, match, rangeInterval)
+			if idx != -1 {
+				next := all[idx]
+				// mark DB and mark in-memory to skip when loop reaches it
+				if err := st.MarkSkipped(next.ID); err != nil {
+					plogger.Errorf("fix event CREATE[%v]+MODIFY[%v] -> CREATE err[%v]",
+						cur.ID, next.ID, err)
+				} else {
+					plogger.Debugf("fix event CREATE[%v]+MODIFY[%v] -> CREATE[%v]+SKIP[%v]",
+						cur.ID, next.ID, cur.ID, next.ID)
 				}
 				skip[idx] = true
 				out = append(out, cur)

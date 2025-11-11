@@ -141,8 +141,8 @@ type PendingEvent struct {
 // and any subsequent unprocessed events whose event_time is within 2 second
 // after that earliest event. Results are ordered by event_time ascending.
 func (s *Storage) GetPendingEvents() ([]PendingEvent, error) {
-	// only consider events older than 2 second to avoid racing with writer
-	cutoff := time.Now().Add(-2 * time.Second).UTC().Format(time.RFC3339)
+	// only consider events older than 2X to avoid racing with writer
+	cutoff := time.Now().Add(-2 * rangeInterval).UTC().Format(time.RFC3339)
 
 	// 1) find the earliest event_time among unprocessed events older than cutoff
 	const minQuery = `SELECT MIN(event_time) FROM file_events WHERE processed = 0 AND event_time <= ?`
@@ -160,9 +160,9 @@ func (s *Storage) GetPendingEvents() ([]PendingEvent, error) {
 		return nil, fmt.Errorf("parse min event_time: %w", err)
 	}
 
-	// upper bound = minEventTime + 2s (storage returns a slightly larger window;
+	// upper bound = minEventTime + 2X (storage returns a slightly larger window;
 	// GetAndFixedPendingEvents will only act on matches within 1s)
-	upper := tmin.Add(2 * time.Second).UTC().Format(time.RFC3339)
+	upper := tmin.Add(2 * rangeInterval).UTC().Format(time.RFC3339)
 	lower := tmin.UTC().Format(time.RFC3339)
 
 	const query = `SELECT id, event_time, event_type, raw_event_type, dir_path, file_path, old_file_path FROM file_events WHERE processed = 0 AND event_time >= ? AND event_time <= ? ORDER BY event_time ASC`
