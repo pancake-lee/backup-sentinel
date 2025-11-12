@@ -23,7 +23,7 @@ func main() {
 		*isLogConsole = true
 	}
 
-	lv := plogger.GetLoggerLevel(*logLevel)
+	lv := plogger.StrToLoggerLevel(*logLevel)
 
 	mode := app.ModeProducer
 	if *consumerMode {

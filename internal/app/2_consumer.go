@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/pancake-lee/pgo/pkg/plogger"
@@ -77,32 +76,28 @@ func (a *App) runConsumer() error {
 
 // processPendingEvent handles a single PendingEvent
 func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
+	plogger.Debug("--------------------------------------------------")
 	plogger.Infof("process id=%d type=%s file=%s at=%s", pe.ID, pe.EventType, pe.FilePath, pe.EventTime.Format(time.RFC3339))
 	// choose command: prefer per-event mapping if present
-	cmdTemplate := a.options.Cmd
+	cmdStr := a.options.Cmd
 	logCmdEventType := "default"
 	if a.options.Cmds != nil {
 		evCmd, ok := a.options.Cmds[pe.EventType]
 		if ok && evCmd != "" {
-			cmdTemplate = evCmd
+			cmdStr = evCmd
 			logCmdEventType = string(pe.EventType)
 		}
 	}
 
 	// If no template at all, error
-	if cmdTemplate == "" {
+	if cmdStr == "" {
 		plogger.Errorf("no command configured to process events")
 		return fmt.Errorf("no command configured")
 	}
 
-	// if template contains %fullfile% replace it, otherwise append ' fullfile <quoted>'
-	var cmdStr string
-	if strings.Contains(cmdTemplate, "%fullfile%") {
-		// replace placeholder with a quoted path to preserve spaces
-		cmdStr = strings.ReplaceAll(cmdTemplate, "%fullfile%", strconv.Quote(pe.FilePath))
-	} else {
-		cmdStr = cmdTemplate + " fullfile " + strconv.Quote(pe.FilePath)
-	}
+	cmdStr += " fullfile " + strconv.Quote(pe.FilePath)
+	cmdStr += " oldfullfile " + strconv.Quote(pe.OldFilePath)
+
 	out, err := putil.ExecSplit(cmdStr)
 	plogger.Debugf("exec cmd[%v][%s] err[%v] out[\n-----\n%v\n-----]",
 		logCmdEventType, cmdStr, err, out)
@@ -131,6 +126,7 @@ func (a *App) loadCmdFile(path string) error {
 	var payload struct {
 		AddCmd    string `json:"add_cmd"`
 		ModifyCmd string `json:"modify_cmd"`
+		RenameCmd string `json:"rename_cmd"`
 		MoveCmd   string `json:"move_cmd"`
 		DeleteCmd string `json:"delete_cmd"`
 	}
@@ -144,6 +140,9 @@ func (a *App) loadCmdFile(path string) error {
 	}
 	if payload.ModifyCmd != "" {
 		m[EventType_MODIFY] = payload.ModifyCmd
+	}
+	if payload.RenameCmd != "" {
+		m[EventType_RENAME] = payload.RenameCmd
 	}
 	if payload.MoveCmd != "" {
 		m[EventType_MOVE] = payload.MoveCmd
@@ -252,8 +251,8 @@ func GetAndFixedPendingEvents(st *Storage) ([]PendingEvent, error) {
 			}
 		}
 
-		// Attempt to detect MOVE followed by MODIFY to skip the MODIFY
-		if cur.EventType == EventType_MOVE {
+		// Attempt to detect RENAME followed by MODIFY to skip the MODIFY
+		if cur.EventType == EventType_RENAME {
 			match := func(a, b PendingEvent) bool {
 				return b.EventType == EventType_MODIFY &&
 					b.FilePath == a.FilePath
@@ -263,10 +262,10 @@ func GetAndFixedPendingEvents(st *Storage) ([]PendingEvent, error) {
 				next := all[idx]
 				// mark DB and mark in-memory to skip when loop reaches it
 				if err := st.MarkSkipped(next.ID); err != nil {
-					plogger.Errorf("fix event RENAME[%v]+MODIFY[%v] -> MOVE err[%v]",
+					plogger.Errorf("fix event RENAME[%v]+MODIFY[%v] -> RENAME err[%v]",
 						cur.ID, next.ID, err)
 				} else {
-					plogger.Debugf("fix event RENAME[%v]+MODIFY[%v] -> MOVE[%v]+SKIP[%v]",
+					plogger.Debugf("fix event RENAME[%v]+MODIFY[%v] -> RENAME[%v]+SKIP[%v]",
 						cur.ID, next.ID, cur.ID, next.ID)
 				}
 				skip[idx] = true

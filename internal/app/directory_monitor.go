@@ -40,7 +40,7 @@ var eventTypeMap = map[string]EventType{
 	"新增":   EventType_CREATE,
 	"创建":   EventType_CREATE,
 	"修改":   EventType_MODIFY,
-	"重命名":  EventType_MOVE,
+	"重命名":  EventType_RENAME,
 	"删除":   EventType_DELETE,
 	"MOVE": EventType_MOVE,
 }
@@ -54,6 +54,7 @@ type EventType string
 const (
 	EventType_CREATE EventType = "CREATE"
 	EventType_MODIFY EventType = "MODIFY"
+	EventType_RENAME EventType = "RENAME"
 	EventType_MOVE   EventType = "MOVE"
 	EventType_DELETE EventType = "DELETE"
 )
