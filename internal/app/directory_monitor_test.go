@@ -6,9 +6,9 @@ import (
 )
 
 func TestParseDirectoryMonitorPayload(t *testing.T) {
-	// Based on the example: {"t":"2025/11/3 16:43:40", "e":"删除", "d":"\\192.168.17.216\team\team_stuffs\inUsd_demo_files", "f":"\\192.168.17.216\team\team_stuffs\inUsd_demo_files\1.jpg"}
+	// Based on the example: {"t":"2025/11/3 16:43:40", "e":"删除", "d":"\\192.168.1.2\1\a\b\c", "f":"\\192.168.1.2\1\a\b\c\1.jpg"}
 	// Note: Backslashes in the JSON string must be escaped.
-	const payload = `{"t":"2025/11/3 16:43:40", "e":"删除", "d":"\\\\192.168.17.216\\team\\team_stuffs\\inUsd_demo_files", "f":"\\\\192.168.17.216\\team\\team_stuffs\\inUsd_demo_files\\1.jpg"}`
+	const payload = `{"t":"2025/11/3 16:43:40", "e":"删除", "d":"\\\\192.168.1.2\\a\\b\\c", "f":"\\\\192.168.1.2\\a\\b\\c\\1.jpg"}`
 
 	event, err := ParseDirectoryMonitorPayload(payload)
 	if err != nil {
@@ -24,12 +24,12 @@ func TestParseDirectoryMonitorPayload(t *testing.T) {
 		t.Errorf("Expected EventType to be 'DELETE', got %q", event.EventType)
 	}
 
-	expectedDir := `\\192.168.17.216\team\team_stuffs\inUsd_demo_files`
+	expectedDir := `\\192.168.1.2\1\a\b\c`
 	if event.DirPath != expectedDir {
 		t.Errorf("Expected DirPath to be %q, got %q", expectedDir, event.DirPath)
 	}
 
-	expectedFile := `\\192.168.17.216\team\team_stuffs\inUsd_demo_files\1.jpg`
+	expectedFile := `\\192.168.1.2\1\a\b\c\1.jpg`
 	if event.FilePath != expectedFile {
 		t.Errorf("Expected FilePath to be %q, got %q", expectedFile, event.FilePath)
 	}

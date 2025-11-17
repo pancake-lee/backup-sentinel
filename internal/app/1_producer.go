@@ -66,6 +66,7 @@ func (a *App) runProducer(args []string) error {
 	return nil
 }
 
+// 跳过，已知的一些特殊文件
 var skipPatterns = []string{
 	"@eaDir",
 	"@SynoEAStream",
