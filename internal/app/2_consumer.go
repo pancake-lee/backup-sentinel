@@ -53,6 +53,7 @@ func (a *App) runConsumer() error {
 
 	// Run an initial immediate check
 	runOnce := func() {
+		plogger.Debug("--------------------------------------------------")
 		pending, err := GetAndFixedPendingEvents(st)
 		if err != nil {
 			plogger.Errorf("get pending: %v", err)
@@ -115,6 +116,7 @@ func (a *App) processPendingEvent(st *Storage, pe PendingEvent, cmdMgr *CmdFileM
 	// If no template at all, error
 	if cmdStr == "" {
 		plogger.Errorf("no command configured to process events")
+		//TODO 可以写一个失败到数据库的标记，然后重启时重试这种情况
 		return fmt.Errorf("no command configured")
 	}
 

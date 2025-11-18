@@ -27,11 +27,6 @@ func main() {
 
 	mode := app.ModeProducer
 	if *consumerMode {
-		if *cmdTemplate == "" && *cmdFile == "" {
-			plogger.Errorf("consumer must set cmd or cmdFile to handle a event")
-			os.Exit(1)
-		}
-
 		mode = app.ModeConsumer
 		plogger.InitLogger(*isLogConsole, lv, "./logs/consumer/")
 		plogger.Debugf("cmd[%v]", *cmdTemplate)
