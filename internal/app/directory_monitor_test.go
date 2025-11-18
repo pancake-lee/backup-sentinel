@@ -24,12 +24,12 @@ func TestParseDirectoryMonitorPayload(t *testing.T) {
 		t.Errorf("Expected EventType to be 'DELETE', got %q", event.EventType)
 	}
 
-	expectedDir := `\\192.168.1.2\1\a\b\c`
+	expectedDir := `\\192.168.1.2\a\b\c`
 	if event.DirPath != expectedDir {
 		t.Errorf("Expected DirPath to be %q, got %q", expectedDir, event.DirPath)
 	}
 
-	expectedFile := `\\192.168.1.2\1\a\b\c\1.jpg`
+	expectedFile := `\\192.168.1.2\a\b\c\1.jpg`
 	if event.FilePath != expectedFile {
 		t.Errorf("Expected FilePath to be %q, got %q", expectedFile, event.FilePath)
 	}

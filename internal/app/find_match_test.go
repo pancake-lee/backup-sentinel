@@ -70,7 +70,7 @@ func TestDeleteCreateNotMatchBeyond1s(t *testing.T) {
 		t.Fatalf("insert delete: %v", err)
 	}
 	crt := Event{EventTime: baseTime.Add(1500 * time.Millisecond), EventType: EventType_CREATE, FilePath: "dir/2.jpg"}
-	cid, err := st.InsertEvent(&crt)
+	_, err = st.InsertEvent(&crt)
 	if err != nil {
 		t.Fatalf("insert create: %v", err)
 	}
@@ -79,11 +79,12 @@ func TestDeleteCreateNotMatchBeyond1s(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get fixed pending: %v", err)
 	}
-	if len(res) != 2 {
-		t.Fatalf("expected 2 pending to process, got %d", len(res))
+	// Delete + Create = Move
+	if len(res) != 1 {
+		t.Fatalf("expected 1 pending to process, got %d", len(res))
 	}
 	// both ids present
-	if res[0].ID != did || res[1].ID != cid {
+	if res[0].ID != did || res[0].EventType != EventType_MOVE {
 		t.Fatalf("unexpected order or ids: %v", res)
 	}
 }

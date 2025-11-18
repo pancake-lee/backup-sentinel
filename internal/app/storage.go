@@ -62,6 +62,7 @@ func (s *Storage) InitSchema() error {
 		event_type TEXT NOT NULL,
 		raw_event_type TEXT,
 		dir_path TEXT NOT NULL,
+		cmd_file TEXT,
 		file_path TEXT NOT NULL,
 		old_file_path TEXT,
 		processed INTEGER DEFAULT 0
@@ -76,10 +77,10 @@ func (s *Storage) InitSchema() error {
 
 // InsertEvent inserts the Event and returns the inserted row id.
 func (s *Storage) InsertEvent(e *Event) (int64, error) {
-	const query = `INSERT INTO file_events (event_time, event_type, raw_event_type, dir_path, file_path, old_file_path) VALUES (?, ?, ?, ?, ?, ?)`
+	const query = `INSERT INTO file_events (event_time, event_type, raw_event_type, dir_path, cmd_file, file_path, old_file_path) VALUES (?, ?, ?, ?, ?, ?, ?)`
 
 	// Use time in UTC for storage
-	res, err := s.db.Exec(query, e.EventTime.UTC().Format(time.RFC3339), e.EventType, e.RawEventType, e.DirPath, e.FilePath, e.OldFilePath)
+	res, err := s.db.Exec(query, e.EventTime.UTC().Format(time.RFC3339Nano), e.EventType, e.RawEventType, e.DirPath, e.CmdFile, e.FilePath, e.OldFilePath)
 	if err != nil {
 		return 0, fmt.Errorf("insert event: %w", err)
 	}
@@ -92,23 +93,24 @@ func (s *Storage) InsertEvent(e *Event) (int64, error) {
 
 // GetEventByID returns the Event stored with the given id.
 func (s *Storage) GetEventByID(id int64) (Event, error) {
-	const query = `SELECT event_time, event_type, raw_event_type, dir_path, file_path, old_file_path FROM file_events WHERE id = ?`
+	const query = `SELECT event_time, event_type, raw_event_type, dir_path, cmd_file, file_path, old_file_path FROM file_events WHERE id = ?`
 
 	var (
 		eventTimeStr string
 		eventType    string
 		rawEventType sql.NullString
 		dirPath      string
+		cmdFile      sql.NullString
 		filePath     string
 		oldFilePath  sql.NullString
 	)
 
 	row := s.db.QueryRow(query, id)
-	if err := row.Scan(&eventTimeStr, &eventType, &rawEventType, &dirPath, &filePath, &oldFilePath); err != nil {
+	if err := row.Scan(&eventTimeStr, &eventType, &rawEventType, &dirPath, &cmdFile, &filePath, &oldFilePath); err != nil {
 		return Event{}, fmt.Errorf("scan event: %w", err)
 	}
 
-	t, err := time.Parse(time.RFC3339, eventTimeStr)
+	t, err := time.Parse(time.RFC3339Nano, eventTimeStr)
 	if err != nil {
 		return Event{}, fmt.Errorf("parse time: %w", err)
 	}
@@ -118,11 +120,15 @@ func (s *Storage) GetEventByID(id int64) (Event, error) {
 		RawEventType: "",
 		EventType:    EventType(eventType),
 		DirPath:      dirPath,
+		CmdFile:      "",
 		FilePath:     filePath,
 		OldFilePath:  "",
 	}
 	if rawEventType.Valid {
 		ev.RawEventType = rawEventType.String
+	}
+	if cmdFile.Valid {
+		ev.CmdFile = cmdFile.String
 	}
 	if oldFilePath.Valid {
 		ev.OldFilePath = oldFilePath.String
@@ -162,10 +168,11 @@ func (s *Storage) GetPendingEvents() ([]PendingEvent, error) {
 
 	// upper bound = minEventTime + 2X (storage returns a slightly larger window;
 	// GetAndFixedPendingEvents will only act on matches within 1s)
-	upper := tmin.Add(2 * rangeInterval).UTC().Format(time.RFC3339)
-	lower := tmin.UTC().Format(time.RFC3339)
+	upper := tmin.Add(2 * rangeInterval).UTC().Format(time.RFC3339Nano)
+	lower := tmin.UTC().Format(time.RFC3339Nano)
 
-	const query = `SELECT id, event_time, event_type, raw_event_type, dir_path, file_path, old_file_path FROM file_events WHERE processed = 0 AND event_time >= ? AND event_time <= ? ORDER BY event_time ASC`
+	const query = `SELECT id, event_time, event_type, raw_event_type, dir_path, cmd_file, file_path, old_file_path FROM file_events WHERE processed = 0 AND event_time >= ? AND event_time <= ? ORDER BY event_time ASC`
+
 	rows, err := s.db.Query(query, lower, upper)
 	if err != nil {
 		return nil, fmt.Errorf("query pending window: %w", err)
@@ -180,13 +187,14 @@ func (s *Storage) GetPendingEvents() ([]PendingEvent, error) {
 			eventType    string
 			rawEventType sql.NullString
 			dirPath      string
+			cmdFile      sql.NullString
 			filePath     string
 			oldFilePath  sql.NullString
 		)
-		if err := rows.Scan(&id, &eventTimeStr, &eventType, &rawEventType, &dirPath, &filePath, &oldFilePath); err != nil {
+		if err := rows.Scan(&id, &eventTimeStr, &eventType, &rawEventType, &dirPath, &cmdFile, &filePath, &oldFilePath); err != nil {
 			return nil, fmt.Errorf("scan pending row: %w", err)
 		}
-		t, err := time.Parse(time.RFC3339, eventTimeStr)
+		t, err := time.Parse(time.RFC3339Nano, eventTimeStr)
 		if err != nil {
 			return nil, fmt.Errorf("parse time: %w", err)
 		}
@@ -195,11 +203,15 @@ func (s *Storage) GetPendingEvents() ([]PendingEvent, error) {
 			RawEventType: "",
 			EventType:    EventType(eventType),
 			DirPath:      dirPath,
+			CmdFile:      "",
 			FilePath:     filePath,
 			OldFilePath:  "",
 		}
 		if rawEventType.Valid {
 			ev.RawEventType = rawEventType.String
+		}
+		if cmdFile.Valid {
+			ev.CmdFile = cmdFile.String
 		}
 		if oldFilePath.Valid {
 			ev.OldFilePath = oldFilePath.String

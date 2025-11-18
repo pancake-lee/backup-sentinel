@@ -33,6 +33,7 @@ type jsonPayload struct {
 	Directory string `json:"d"`
 	File      string `json:"f"`
 	OldFile   string `json:"of"`
+	CmdFile   string `json:"cmd_file"`
 	Size      string `json:"s"`
 }
 
@@ -66,6 +67,7 @@ type Event struct {
 	DirPath      string
 	FilePath     string
 	OldFilePath  string
+	CmdFile      string
 	Size         int64
 }
 
@@ -102,6 +104,7 @@ func ParseDirectoryMonitorPayload(raw string) (*Event, error) {
 		DirPath:      payload.Directory,
 		FilePath:     payload.File,
 		OldFilePath:  payload.OldFile,
+		CmdFile:      payload.CmdFile,
 		Size:         putil.StrToInt64WithDefault(payload.Size, 0),
 	}
 

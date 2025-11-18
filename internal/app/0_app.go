@@ -38,8 +38,7 @@ type Options struct {
 	// CmdFile optionally points to a JSON file containing per-event commands.
 	// When set, the file is parsed and commands loaded into Cmds.
 	CmdFile string
-	// Cmds stores commands keyed by normalized event type (e.g. CREATE, MODIFY, RENAME, DELETE).
-	Cmds map[EventType]string
+	// per-event commands are loaded via CmdFileManager; no in-memory map here.
 }
 
 // App coordinates the executable lifecycle.

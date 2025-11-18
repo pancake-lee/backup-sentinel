@@ -1,9 +1,7 @@
 package app
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -24,9 +22,12 @@ func (a *App) runConsumer() error {
 	}
 	defer st.Close()
 
-	// If a command file is provided, try to load per-event commands.
+	// Command file manager for per-event cmd files referenced in events.
+	cmdMgr := NewCmdFileManager(0)
+
+	// If a command file is provided via CLI, preload it into cmd manager.
 	if a.options.CmdFile != "" {
-		if err := a.loadCmdFile(a.options.CmdFile); err != nil {
+		if err := cmdMgr.Load(a.options.CmdFile); err != nil {
 			plogger.Errorf("failed to load cmd file %s: %v", a.options.CmdFile, err)
 			return fmt.Errorf("load cmd file: %w", err)
 		}
@@ -59,7 +60,7 @@ func (a *App) runConsumer() error {
 		}
 
 		for _, pe := range pending {
-			if err := a.processPendingEvent(st, pe); err != nil {
+			if err := a.processPendingEvent(st, pe, cmdMgr); err != nil {
 				// log and continue with next pending event
 				plogger.Errorf("processing id=%d failed: %v", pe.ID, err)
 			}
@@ -75,15 +76,37 @@ func (a *App) runConsumer() error {
 }
 
 // processPendingEvent handles a single PendingEvent
-func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
+func (a *App) processPendingEvent(st *Storage, pe PendingEvent, cmdMgr *CmdFileManager) error {
 	plogger.Debug("--------------------------------------------------")
 	plogger.Infof("process id=%d type=%s file=%s at=%s", pe.ID, pe.EventType, pe.FilePath, pe.EventTime.Format(time.RFC3339))
 	// choose command: prefer per-event mapping if present
-	cmdStr := a.options.Cmd
+	cmdStr := ""
 	logCmdEventType := "default"
-	if a.options.Cmds != nil {
-		evCmd, ok := a.options.Cmds[pe.EventType]
-		if ok && evCmd != "" {
+
+	// 1) global CLI override
+	if a.options.Cmd != "" {
+		cmdStr = a.options.Cmd
+		logCmdEventType = "cli"
+	}
+
+	// next steps: consult CLI cmd-file via cmdMgr or event-level cmd_file as fallback
+
+	// 2) if CLI provided a cmd-file, consult it via manager
+	if cmdStr == "" && a.options.CmdFile != "" {
+		if evCmd, err := cmdMgr.GetCmd(a.options.CmdFile, pe.EventType); err == nil && evCmd != "" {
+			cmdStr = evCmd
+			logCmdEventType = string(pe.EventType)
+		} else if err != nil {
+			plogger.Errorf("failed to get cmd from CLI cmd_file %s: %v", a.options.CmdFile, err)
+		}
+	}
+
+	// 3) fallback: event-level cmd_file referenced in the event record
+	if cmdStr == "" && pe.CmdFile != "" {
+		evCmd, err := cmdMgr.GetCmd(pe.CmdFile, pe.EventType)
+		if err != nil {
+			plogger.Errorf("failed to get cmd from event cmd_file %s: %v", pe.CmdFile, err)
+		} else if evCmd != "" {
 			cmdStr = evCmd
 			logCmdEventType = string(pe.EventType)
 		}
@@ -111,48 +134,6 @@ func (a *App) processPendingEvent(st *Storage, pe PendingEvent) error {
 		return plogger.LogErr(err)
 	}
 	plogger.Debugf("marked processed id=%d", pe.ID)
-	return nil
-}
-
-// loadCmdFile reads the provided JSON file and fills a.options.Cmds with
-// normalized event type keys mapping to command templates. Expected JSON keys:
-// add_cmd, modify_cmd, move_cmd, delete_cmd
-func (a *App) loadCmdFile(path string) error {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read file: %w", err)
-	}
-
-	var payload struct {
-		AddCmd    string `json:"add_cmd"`
-		ModifyCmd string `json:"modify_cmd"`
-		RenameCmd string `json:"rename_cmd"`
-		MoveCmd   string `json:"move_cmd"`
-		DeleteCmd string `json:"delete_cmd"`
-	}
-	if err := json.Unmarshal(b, &payload); err != nil {
-		return fmt.Errorf("unmarshal cmd file: %w", err)
-	}
-
-	m := make(map[EventType]string)
-	if payload.AddCmd != "" {
-		m[EventType_CREATE] = payload.AddCmd
-	}
-	if payload.ModifyCmd != "" {
-		m[EventType_MODIFY] = payload.ModifyCmd
-	}
-	if payload.RenameCmd != "" {
-		m[EventType_RENAME] = payload.RenameCmd
-	}
-	if payload.MoveCmd != "" {
-		m[EventType_MOVE] = payload.MoveCmd
-	}
-	if payload.DeleteCmd != "" {
-		m[EventType_DELETE] = payload.DeleteCmd
-	}
-
-	a.options.Cmds = m
-	plogger.Debugf("loaded commands from %s: %+v", path, a.options.Cmds)
 	return nil
 }
 
